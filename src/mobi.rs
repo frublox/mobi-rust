@@ -329,41 +329,51 @@ impl ExthHeader {
 /// In addition, text records can optionally can trailing entries specifying things like
 /// bytes needed to complete a multibyte character that crosses the record boundary 
 /// (`extra_multibyte_bytes`).
-struct Record {
-    data: Vec<u8>,
-    extra_multibyte_bytes: Vec<u8>,
-    tbs_indexing_description: Vec<u8>,
-    uncrossable_breaks: Vec<u8>,
+struct Record<'a> {
+    data: &'a [u8],
+    extra_multibyte_bytes: &'a [u8],
+    tbs_indexing_description: &'a [u8],
+    uncrossable_breaks: &'a [u8],
 }
 
-impl Record {
-    fn new(bytes: &[u8], flags: u32) -> Record {
-        let mut extra_multibyte_bytes = vec!();
-        let mut tbs_indexing_description = vec!();
-        let mut uncrossable_breaks = vec!();
-
+impl<'a> Record<'a> {
+    fn new(bytes: &'a [u8], flags: u32) -> Record {
         let mut i = bytes.len();
-        i -= 1;
-        
-        if flags & 0x4 != 0 {
-            read_trailing_entry(&bytes, &mut i, &mut uncrossable_breaks);
-        } 
-        if flags & 0x2 != 0 {
-            read_trailing_entry(&bytes, &mut i, &mut tbs_indexing_description);
-        }
-        if flags & 0x1 != 0 {
-            // Trailing multibytes are handled a bit differently
-            // Instead of a backwards-encoded VL integer, we just use the bottom 2
-            // bits of the end byte to see how many trailing multibytes there are
-            let n = bytes[i] & 0b0000_0011;
-            i -= 1;
-            for _ in 0..n {
-                extra_multibyte_bytes.push(bytes[i]);
-                i -= 1;
-            }
-        }
 
-        let data = bytes[..i+1].to_vec();
+        // These trailing entries are in the format <data><size>, where <size> is a backwards-encoded  
+        // variable-length integer. We only store a slice of <data> in the Record struct,
+        // since we can add the <size> back ourselves from looking at the size of the slice.
+
+        // However, for `extra_multibyte_bytes`, the size is just stored in the bottom two bits and the
+        // purpose of the other bits are unknown (they could be set and have some actual purpose).
+        // So for `extra_multibyte_bytes`, we should probably store the size byte somewhere. TODO
+        
+        let uncrossable_breaks = 
+            if flags & 0x4 != 0 {
+                read_trailing_entry(&bytes, &mut i)
+            } else {
+                &bytes[i..i]
+            };
+        let tbs_indexing_description = 
+            if flags & 0x2 != 0 {
+                read_trailing_entry(&bytes, &mut i)
+            } else {
+                &bytes[i..i]
+            };
+        let extra_multibyte_bytes = 
+            if flags & 0x1 != 0 {
+                // Trailing multibytes are handled a bit differently
+                // Instead of a backwards-encoded VL integer, we just use the bottom 2
+                // bits of the end byte to see how many trailing multibytes there are
+                i -= 1;
+                let n = (bytes[i] & 0b0000_0011) as usize;
+                i -= n;
+                &bytes[i..(i + n)]
+            } else {
+                &bytes[i..i]
+            };
+
+        let data = &bytes[..i];
 
         Record {
             data, extra_multibyte_bytes, tbs_indexing_description, uncrossable_breaks,
@@ -371,14 +381,12 @@ impl Record {
     }
 }
 
-fn read_trailing_entry(bytes: &[u8], i: &mut usize, output: &mut Vec<u8>)  {
-    let mut size = backwards_encoded_vl_integer(&bytes, i);
-    size -= 1; // TODO for now assuming size itself is only 1 byte long
-    while size > 0 {
-        output.push(bytes[*i]);
-        *i -= 1;
-        size -= 1;
-    }
+fn read_trailing_entry<'a>(bytes: &'a [u8], i: &mut usize) -> &'a [u8]  {
+    *i -= 1;
+    let start_ix = *i;
+    let size = backwards_encoded_vl_integer(&bytes, i);
+    *i -= (size - 1) as usize; // TODO for now assuming size itself is only 1 byte long
+    &bytes[*i..start_ix]
 }
 
 /// Decode a Mobipocket backwards-encoded variable-length integer.
@@ -389,11 +397,11 @@ fn backwards_encoded_vl_integer(bytes: &[u8], i: &mut usize) -> u32 {
         // Add bottom 7 bits to n
         n |= ((bytes[*i] & 0b0111_1111) as u32) << pos;
         pos += 7;
-        *i -= 1;
-        // If msb was set or we've read 28 bits, we're done
-        if bytes[*i + 1] & 0b1000_0000 != 0 || pos >= 28 {
+        // If msb set or we've read 28 bits, we're done
+        if bytes[*i] & 0b1000_0000 != 0 || pos >= 28 {
             break;
         }
+        *i -= 1;
     }
     n
 }
@@ -494,9 +502,9 @@ impl TagxSection {
 }
 
 /// A Mobipocket format file.
-pub struct Mobi {
+pub struct Mobi<'a> {
     metadata: Metadata,
-    record_list: Vec<Record>,
+    record_list: Vec<Record<'a>>,
     /// Found in record 0
     palm_doc_header: PalmDocHeader,
     /// Found in record 0
@@ -509,10 +517,9 @@ pub struct Mobi {
     tagx_section: Option<TagxSection>,
 }
 
-impl Mobi {
+impl<'a> Mobi<'a> {
     /// Deserialize a MOBI file from a sequence of bytes. 
-    pub fn from_file(path: &str) -> io::Result<Mobi> {
-        let bytes = fs::read(path)?;
+    pub fn from_bytes(bytes: &[u8]) -> Mobi {
         let metadata = Metadata::new(&bytes);
 
         // Special record 0 data
@@ -564,11 +571,10 @@ impl Mobi {
                 (Option::None, Option::None)
             };
         
-        let mobi = Mobi {
+        Mobi {
             metadata, palm_doc_header, mobi_header, exth_header, record_list, full_name,
             index_meta_record, tagx_section,
-        };
-        Ok(mobi)
+        }
     }
 
     /// Serialize a MOBI struct back into a sequence of bytes.
@@ -620,9 +626,6 @@ impl Mobi {
             // `spawn_unchecked` lets us get around cloning the chunk.
             // It's a small speed boost. On my machine, it's around ~50ms faster for 65 MiB of compressed 
             // data.
-
-            // TODO let's just create the vec here and pass a ref to the thread
-            // Then the thread can just write into it, avoiding another copy
 
             unsafe {
                 builder.spawn_unchecked(move || {
@@ -692,9 +695,25 @@ impl Mobi {
         //         &mobi.record_list[i].extra_multibyte_bytes,
         //         &mobi.record_list[i].tbs_indexing_description);
 
-        //     if i >= mobi.mobi_header.first_non_book_record_number as usize {
+        //     if i >= 10 as usize {
         //         break;
         //     }
         // }
+    }
+}
+
+pub struct MobiReader {
+    bytes: Vec<u8>,
+}
+
+impl MobiReader {
+    pub fn new(path: &str) -> io::Result<MobiReader> {
+        let bytes = fs::read(path)?;
+        let reader = MobiReader { bytes };
+        Ok(reader)
+    }
+
+    pub fn read(reader: &MobiReader) -> Mobi {
+        Mobi::from_bytes(&reader.bytes)
     }
 }

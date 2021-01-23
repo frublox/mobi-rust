@@ -8,7 +8,7 @@ mod lz77;
 use std::error::Error;
 use std::env;
 use std::process;
-use crate::mobi::Mobi;
+use crate::mobi::{ MobiReader, Mobi };
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
@@ -18,8 +18,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let input_path = &args[1];
     let output_path = &args[2];
-    let mobi = Mobi::from_file(input_path)?;
-    // Mobi::display_summary(&mobi);
+    let reader = MobiReader::new(input_path)?;
+    let mobi = MobiReader::read(&reader);
+    Mobi::display_summary(&mobi);
     Mobi::dump_text_to_file_concurrent(&mobi, output_path, num_cpus::get())?;
     Ok(())
 }
