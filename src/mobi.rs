@@ -97,7 +97,7 @@ struct PalmDocHeader {
     record_count: u16,
     /// Maximum size of each record containing text. Always 4096.
     record_size: u16,
-    /// 0 == no encryption
+    /// 0 = no encryption
     /// 
     /// 1 = Old Mobipocket Encryption
     /// 
@@ -225,6 +225,7 @@ struct MobiHeader {
     /// 
     /// bit 3 (0x4): <uncrossable breaks><size>
     extra_record_data_flags: u32,
+    /// The record number of the INDX record.
     indx_record_number: u32,
 }
 
@@ -276,7 +277,7 @@ impl ExthRecord {
     fn new(bytes: &[u8]) -> ExthRecord {
         let type_ = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
         let length = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
-        let data = bytes[8..(length as usize + 8)].to_vec();
+        let data = bytes[8..(8 + length as usize)].to_vec();
 
         ExthRecord {
             type_, length, data
@@ -326,7 +327,7 @@ impl ExthHeader {
 /// The contents of records can be metadata, text, images, etc.
 /// Records containing content like text and images are LZ77-encoded.
 /// 
-/// In addition, text records can optionally can trailing entries specifying things like
+/// In addition, text records can optionally contain trailing entries specifying things like
 /// bytes needed to complete a multibyte character that crosses the record boundary 
 /// (`extra_multibyte_bytes`).
 struct Record<'a> {
