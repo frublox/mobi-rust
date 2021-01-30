@@ -1,5 +1,6 @@
 use std::convert::TryInto;
 use std::cmp;
+use debug_print::{debug_print, debug_println};
 
 /// Decompress a PalmDoc-LZ77-encoded sequence of bytes.
 /// Handles only up to 4096 bytes (i.e. a single 'chunk').
@@ -56,10 +57,10 @@ fn compress(input: &[u8]) -> Vec<u8> {
     let mut literal_pool: Vec<u8> = vec!();
 
     while i < input.len() {
-        print!("i={} ", i);
+        debug_print!("i={} ", i);
         match find_longest_match(&input, i) {
             Option::Some((distance, length)) => {
-                println!("Handling match distance={}, length={} \"{}\"", distance, length, std::str::from_utf8(&input[i - distance .. (i - distance)+length]).unwrap());
+                debug_println!("Handling match distance={}, length={} \"{}\"", distance, length, std::str::from_utf8(&input[i - distance .. (i - distance)+length]).unwrap());
                 dump_literal_pool(&mut output, &mut literal_pool);
                 // Encode 10dd dddd dddd dlll
                 output.push(0b1000_0000 | (distance >> 5) as u8);
@@ -78,11 +79,10 @@ fn compress(input: &[u8]) -> Vec<u8> {
                     }
                 }
                 if reps > 2 { // Encoding takes 2, so only worth for > 2
-                    println!("Handling {} reps", reps);
+                    debug_println!("Handling {} reps", reps);
                     dump_literal_pool(&mut output, &mut literal_pool);
                     output.push(reps as u8);
                     output.push(input[i]);
-                    println!("--> Added {:0>2x}, {:0>2x}", reps as u8, input[i]);
                     i += reps + 1;
                     continue;
                 }
@@ -93,15 +93,14 @@ fn compress(input: &[u8]) -> Vec<u8> {
                 if input[i] == 0x20 && i < input.len() - 1 
                     && (input[i+1] >= 0x40 && input[i+1] <= 0x7f) 
                 {
-                    println!("Handling space+{} '{}'", input[i+1], input[i+1] as char);
+                    debug_println!("Handling space+{} '{}'", input[i+1], input[i+1] as char);
                     dump_literal_pool(&mut output, &mut literal_pool);
                     output.push(input[i+1] ^ 0x80);
-                    println!("--> Added {:0>2x}", input[i+1] ^ 0x80);
                     i += 2;
                     continue;
                 }
                 
-                println!("Adding literal {} '{}'", input[i], input[i] as char);
+                debug_println!("Adding literal {} '{}'", input[i], input[i] as char);
                 // Handle this literal byte later
                 literal_pool.push(input[i]);
                 i += 1;
@@ -145,7 +144,7 @@ fn find_longest_match(input: &[u8], curr: usize) -> Option<(usize, usize)> {
     // We need at least 3 bytes behind curr and
     // at least 3 bytes starting from curr
     // Otherwise, there won't be enough for a 3-byte-long match
-    if curr <= 2 || curr > input.len()-3 {
+    if curr < 3 || curr > input.len()-3 {
         return Option::None;
     }
 
@@ -199,6 +198,5 @@ mod tests {
         let mut decompressed = vec!();
         decompress(&compressed, &mut decompressed);
         assert_eq!(input, &decompressed[..]);
-
     } 
 }
