@@ -2,6 +2,7 @@ use crate::lz77;
 use std::fs;
 use std::io;
 use std::str;
+use std::string;
 use std::convert::TryInto;
 use std::thread;
 use std::sync::mpsc;
@@ -583,38 +584,14 @@ impl<'a> Mobi<'a> {
         panic!("TODO implement")
     }
 
-    pub fn dump_text_to_file(mobi: &Mobi, path: &str) -> Result<(), String> {
+    /// Decompress all text records into a single UTF-8 string.
+    pub fn dump_text(mobi: &Mobi) -> Result<String, string::FromUtf8Error> {
         let first_non_book_record_number = mobi.mobi_header.first_non_book_record_number as usize;
         let text_records = &mobi.record_list[1..first_non_book_record_number - 1];
 
-        println!("Decompressing with 1 thread.");
-        let decompression_start = Instant::now();
-        let mut decompressed = vec!();
-        for record in text_records.iter() {
-            lz77::decompress(&record.data, &mut decompressed);
-        }
-        let decompression_end = Instant::now();
-
-        let mut total_text_size = 0;
-        for record in text_records {
-            total_text_size += record.data.len();
-        }
-
-        println!("Decompressed {} KiB ({:.2} MiB) in {} ms.", 
-            total_text_size / 1024, (total_text_size as f32) / 1024.0 / 1024.0, 
-            decompression_end.duration_since(decompression_start).as_millis());
-
-        let s = str::from_utf8(&decompressed).map_err(|x| format!("{}", x))?;
-        let result = fs::write(path, s).map_err(|x| format!("{}", x));
-        println!("Wrote text to \"{}\"", path);
-        result
-    }
-
-    pub fn dump_text_to_file_concurrent(mobi: &Mobi, path: &str, num_threads: usize) -> Result<(), String> {
-        let first_non_book_record_number = mobi.mobi_header.first_non_book_record_number as usize;
-        let text_records = &mobi.record_list[1..first_non_book_record_number - 1];
-
-        println!("Decompressing with {} threads.", num_threads);
+        // TODO move this parallelism stuff into `lz77::decompress_all`
+        
+        let num_threads = num_cpus::get();
         let decompression_start = Instant::now();
         let (tx, rx) = mpsc::channel();
         let chunk_size = text_records.len() / num_threads;
@@ -655,14 +632,13 @@ impl<'a> Mobi<'a> {
         for record in text_records.iter() {
             total_text_size += record.data.len();
         }
-        println!("Decompressed {} KiB ({:.2} MiB) in {} ms.", 
-            total_text_size / 1024, (total_text_size as f32) / 1024.0 / 1024.0, 
-            decompression_end.duration_since(decompression_start).as_millis());
 
-        let s = str::from_utf8(&decompressed).map_err(|x| format!("{}", x))?;
-        let result = fs::write(path, s).map_err(|x| format!("{}", x));
-        println!("Wrote text to {}.", path);
-        result
+        let s = String::from_utf8(decompressed);
+        println!("Decompressed {} KiB ({:.2} MiB) in {} ms using {} threads.", 
+            total_text_size / 1024, (total_text_size as f32) / 1024.0 / 1024.0, 
+            decompression_end.duration_since(decompression_start).as_millis(),
+            num_threads);
+        s
     }
 
     /// Display a rough summary useful for debugging.
@@ -703,6 +679,8 @@ impl<'a> Mobi<'a> {
     }
 }
 
+// This is kind of dumb. Just a convenience so the caller doesn't have to keep a reference araound
+// to bytes which Mobi references into. Might be a cleaner solution.
 pub struct MobiReader {
     bytes: Vec<u8>,
 }
